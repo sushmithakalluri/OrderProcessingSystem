@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+.vscode/settings.json
+*.user
+*.suo
+.env
+DockerData/
