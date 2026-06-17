@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
-using OrderApi.Data;
 using OrderApi.DTOs;
-using OrderApi.Entities;
+using OrderApi.Exceptions;
+using OrderApi.Services;
 
 namespace OrderApi.Controllers;
 
@@ -9,37 +9,24 @@ namespace OrderApi.Controllers;
 [Route("api/[controller]")]
 public class OrdersController : ControllerBase
 {
-    private readonly OrderDbContext _context;
+    private readonly IOrderService _orderService;
 
-    public OrdersController(OrderDbContext context)
+    public OrdersController(IOrderService orderService)
     {
-        _context = context;
+        _orderService = orderService;
     }
 
     [HttpPost]
     public async Task<IActionResult> CreateOrder(CreateOrderRequest request)
     {
-        var now = DateTime.UtcNow;
-
-        var order = new Order
+        try
         {
-            OrderId = Guid.NewGuid(),
-            CustomerId = request.CustomerId,
-            CustomerEmail = request.CustomerEmail,
-            TotalAmount = request.TotalAmount,
-            Status = "Pending",
-            CreatedAt = now,
-            UpdatedAt = now
-        };
-
-        _context.Orders.Add(order);
-        await _context.SaveChangesAsync();
-
-        return Accepted(new
+            var response = await _orderService.CreateOrderAsync(request);
+            return Accepted(response);
+        }
+        catch (OrderValidationException ex)
         {
-            order.OrderId,
-            order.Status,
-            Message = "Order received and is being processed"
-        });
+            return BadRequest(new { error = ex.Message });
+        }
     }
 }
