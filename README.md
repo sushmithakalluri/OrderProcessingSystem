@@ -68,3 +68,34 @@ Redis
   | Cache miss
   v
 SQL Server
+
+## Current Progress
+
+
+### Completed
+
+- SQL Server running in Docker
+- Redis running in Docker
+- RabbitMQ running in Docker
+- Database schema created
+- EF Core integration
+- Order entity
+- Product entity
+- OrderItem entity
+- OutboxMessage entity
+- Order creation API
+- Order validation
+- Total amount calculation
+- Transaction handling
+- Swagger testing
+- Health endpoint
+- Outbox pattern persistence
+
+### Next Steps
+
+- RabbitMQ fundamentals
+- RabbitMQ publisher
+- Outbox publisher background worker
+- Inventory service consumer
+- Notification service consumer
+- Redis caching

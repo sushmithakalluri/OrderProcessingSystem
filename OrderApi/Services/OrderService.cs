@@ -1,3 +1,4 @@
+using System.Text.Json;
 using OrderApi.Data;
 using OrderApi.DTOs;
 using OrderApi.Entities;
@@ -64,15 +65,41 @@ public class OrderService : IOrderService
             TotalAmount = totalAmount,
             Status = "Pending",
             CreatedAt = now,
-            UpdatedAt = now
+            UpdatedAt = now,
+            OrderItems = orderItems
         };
 
-        _context.Orders.Add(order);
-        await _context.SaveChangesAsync();
+        var outboxMessage = new OutboxMessage
+        {
+            MessageId = Guid.NewGuid(),
+            EventType = "order.created",
+            Payload = JsonSerializer.Serialize(new
+            {
+                OrderId = orderId,
+                CustomerId = order.CustomerId,
+                CustomerEmail = order.CustomerEmail,
+                Items = orderItems.Select(x => new
+                {
+                    x.ProductId,
+                    x.ProductName,
+                    x.Quantity,
+                    x.UnitPrice
+                }),
+                TotalAmount = totalAmount
+            }),
+            Status = "Pending",
+            CreatedAt = now,
+            ProcessedAt = null
+        };
 
-        _context.OrderItems.AddRange(orderItems);
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+
+        _context.Orders.Add(order);
+        _context.OutboxMessages.Add(outboxMessage);
+
         await _context.SaveChangesAsync();
-        
+        await transaction.CommitAsync();
+
         return new CreateOrderResponse
         {
             OrderId = order.OrderId,
