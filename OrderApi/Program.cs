@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using OrderApi.Data;
 using OrderApi.Services;
+using OrderApi.Configuration;
+using OrderApi.Messaging;
+using OrderApi.BackgroundServices;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +16,10 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.Configure<RabbitMqSettings>(builder.Configuration.GetSection("RabbitMq"));
+builder.Services.AddScoped<IRabbitMqPublisher, RabbitMqPublisher>();
+builder.Services.AddHostedService<OutboxPublisherService>();
 
 var app = builder.Build();
 
