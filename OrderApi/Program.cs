@@ -20,6 +20,8 @@ builder.Services.AddSwaggerGen();
 builder.Services.Configure<RabbitMqSettings>(builder.Configuration.GetSection("RabbitMq"));
 builder.Services.AddScoped<IRabbitMqPublisher, RabbitMqPublisher>();
 builder.Services.AddHostedService<OutboxPublisherService>();
+builder.Services.AddHostedService<OutboxPublisherService>();
+builder.Services.AddHostedService<OrderStatusConsumerService>();
 
 var app = builder.Build();
 
