@@ -5,6 +5,8 @@ using InventoryService.DTOs;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using InventoryService.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace InventoryService;
 
@@ -12,13 +14,15 @@ public class Worker : BackgroundService
 {
     private readonly ILogger<Worker> _logger;
     private readonly RabbitMqSettings _settings;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public Worker(
         ILogger<Worker> logger,
-        IOptions<RabbitMqSettings> options)
+        IOptions<RabbitMqSettings> options, IServiceScopeFactory scopeFactory)
     {
         _logger = logger;
         _settings = options.Value;
+        _scopeFactory = scopeFactory;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -62,28 +66,66 @@ public class Worker : BackgroundService
             var orderCreatedEvent = JsonSerializer.Deserialize<OrderCreatedEvent>(
                 json,
                 new JsonSerializerOptions
-                {
+                {   
                     PropertyNameCaseInsensitive = true
                 });
 
             if (orderCreatedEvent == null)
             {
                 _logger.LogWarning("Received invalid order.created message");
+                await channel.BasicNackAsync(
+                    deliveryTag: eventArgs.DeliveryTag,
+                    multiple: false,
+                    requeue: false);
                 return;
             }
 
-            _logger.LogInformation(
-                "InventoryService received order.created event. OrderId: {OrderId}, TotalAmount: {TotalAmount}, ItemsCount: {ItemsCount}",
-                orderCreatedEvent.OrderId,
-                orderCreatedEvent.TotalAmount,
-                orderCreatedEvent.Items.Count);
+            using var scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider
+                .GetRequiredService<InventoryDbContext>();
+            
+            foreach (var item in orderCreatedEvent.Items)
+            {
+                var product = await dbContext.Products
+                    .FirstOrDefaultAsync(p => p.ProductId == item.ProductId);
 
-            await Task.CompletedTask;
+                if (product == null)    
+                {
+                    _logger.LogWarning("Product not found: {ProductId}", item.ProductId);
+                    continue;
+                }
+
+                if (product.StockQuantity < item.Quantity)
+                {
+                    _logger.LogWarning(
+                        "Insufficient stock for product {ProductId}. Available: {Available}, Requested: {Requested}",
+                        product.ProductId,
+                        product.StockQuantity,
+                        item.Quantity);
+                    continue;
+                }
+
+                product.StockQuantity -= item.Quantity;
+                _logger.LogInformation(
+                    "Stock updated. Product: {ProductName}, Remaining Stock: {Stock}",
+                    product.ProductName,
+                    product.StockQuantity);
+            }
+
+            await dbContext.SaveChangesAsync();
+            _logger.LogInformation(
+                "Inventory processing completed for OrderId: {OrderId}",
+                orderCreatedEvent.OrderId);
+            
+            await channel.BasicAckAsync(
+                deliveryTag: eventArgs.DeliveryTag,
+                multiple: false);
+    
         };
 
         await channel.BasicConsumeAsync(
             queue: _settings.QueueName,
-            autoAck: true,
+            autoAck: false,
             consumer: consumer,
             cancellationToken: stoppingToken);
 
