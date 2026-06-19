@@ -1,12 +1,13 @@
 using System.Text;
 using System.Text.Json;
 using InventoryService.Configuration;
+using InventoryService.Data;
 using InventoryService.DTOs;
+using InventoryService.Messaging;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using InventoryService.Data;
-using Microsoft.EntityFrameworkCore;
 
 namespace InventoryService;
 
@@ -18,7 +19,8 @@ public class Worker : BackgroundService
 
     public Worker(
         ILogger<Worker> logger,
-        IOptions<RabbitMqSettings> options, IServiceScopeFactory scopeFactory)
+        IOptions<RabbitMqSettings> options,
+        IServiceScopeFactory scopeFactory)
     {
         _logger = logger;
         _settings = options.Value;
@@ -60,67 +62,114 @@ public class Worker : BackgroundService
 
         consumer.ReceivedAsync += async (sender, eventArgs) =>
         {
-            var body = eventArgs.Body.ToArray();
-            var json = Encoding.UTF8.GetString(body);
-
-            var orderCreatedEvent = JsonSerializer.Deserialize<OrderCreatedEvent>(
-                json,
-                new JsonSerializerOptions
-                {   
-                    PropertyNameCaseInsensitive = true
-                });
-
-            if (orderCreatedEvent == null)
+            try
             {
-                _logger.LogWarning("Received invalid order.created message");
+                var body = eventArgs.Body.ToArray();
+                var json = Encoding.UTF8.GetString(body);
+
+                var orderCreatedEvent = JsonSerializer.Deserialize<OrderCreatedEvent>(
+                    json,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
+                if (orderCreatedEvent == null)
+                {
+                    _logger.LogWarning("Received invalid order.created message");
+
+                    await channel.BasicNackAsync(
+                        deliveryTag: eventArgs.DeliveryTag,
+                        multiple: false,
+                        requeue: false);
+
+                    return;
+                }
+
+                using var scope = _scopeFactory.CreateScope();
+
+                var dbContext = scope.ServiceProvider
+                    .GetRequiredService<InventoryDbContext>();
+
+                var publisher = scope.ServiceProvider
+                    .GetRequiredService<RabbitMqPublisher>();
+
+                var isInventoryAvailable = true;
+                var failureReason = string.Empty;
+
+                foreach (var item in orderCreatedEvent.Items)
+                {
+                    var product = await dbContext.Products
+                        .FirstOrDefaultAsync(
+                            p => p.ProductId == item.ProductId,
+                            stoppingToken);
+
+                    if (product == null)
+                    {
+                        isInventoryAvailable = false;
+                        failureReason = $"Product not found: {item.ProductId}";
+                        break;
+                    }
+
+                    if (product.StockQuantity < item.Quantity)
+                    {
+                        isInventoryAvailable = false;
+                        failureReason =
+                            $"Insufficient stock for product {product.ProductName}. Available: {product.StockQuantity}, Requested: {item.Quantity}";
+                        break;
+                    }
+
+                    product.StockQuantity -= item.Quantity;
+                    product.UpdatedAt = DateTime.UtcNow;
+
+                    _logger.LogInformation(
+                        "Stock updated. Product: {ProductName}, Remaining Stock: {Stock}",
+                        product.ProductName,
+                        product.StockQuantity);
+                }
+
+                string resultStatus;
+
+                if (isInventoryAvailable)
+                {
+                    await dbContext.SaveChangesAsync(stoppingToken);
+                    resultStatus = "Confirmed";
+                }
+                else
+                {
+                    resultStatus = "Failed";
+                }
+
+                var resultEvent = new OrderInventoryResultEvent
+                {
+                    OrderId = orderCreatedEvent.OrderId,
+                    Status = resultStatus,
+                    Reason = failureReason
+                };
+
+                var resultJson = JsonSerializer.Serialize(resultEvent);
+
+                await publisher.PublishResultAsync(resultJson);
+
+                _logger.LogInformation(
+                    "Inventory result published. OrderId: {OrderId}, Status: {Status}, Reason: {Reason}",
+                    resultEvent.OrderId,
+                    resultEvent.Status,
+                    resultEvent.Reason);
+
+                await channel.BasicAckAsync(
+                    deliveryTag: eventArgs.DeliveryTag,
+                    multiple: false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing inventory message");
+
                 await channel.BasicNackAsync(
                     deliveryTag: eventArgs.DeliveryTag,
                     multiple: false,
-                    requeue: false);
-                return;
+                    requeue: true);
             }
-
-            using var scope = _scopeFactory.CreateScope();
-            var dbContext = scope.ServiceProvider
-                .GetRequiredService<InventoryDbContext>();
-            
-            foreach (var item in orderCreatedEvent.Items)
-            {
-                var product = await dbContext.Products
-                    .FirstOrDefaultAsync(p => p.ProductId == item.ProductId);
-
-                if (product == null)    
-                {
-                    _logger.LogWarning("Product not found: {ProductId}", item.ProductId);
-                    continue;
-                }
-
-                if (product.StockQuantity < item.Quantity)
-                {
-                    _logger.LogWarning(
-                        "Insufficient stock for product {ProductId}. Available: {Available}, Requested: {Requested}",
-                        product.ProductId,
-                        product.StockQuantity,
-                        item.Quantity);
-                    continue;
-                }
-
-                product.StockQuantity -= item.Quantity;
-                _logger.LogInformation(
-                    "Stock updated. Product: {ProductName}, Remaining Stock: {Stock}",
-                    product.ProductName,
-                    product.StockQuantity);
-            }
-
-            await dbContext.SaveChangesAsync();
-            _logger.LogInformation(
-                "Inventory processing completed for OrderId: {OrderId}",
-                orderCreatedEvent.OrderId);
-            
-            await channel.BasicAckAsync(
-                deliveryTag: eventArgs.DeliveryTag,
-                multiple: false);
-    
         };
 
         await channel.BasicConsumeAsync(
