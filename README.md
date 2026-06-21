@@ -4,25 +4,6 @@ A microservices-based order processing system built with .NET 8, SQL Server, Rab
 
 This project demonstrates backend engineering concepts commonly used in scalable e-commerce systems, including asynchronous messaging, event-driven architecture, transactional outbox, caching, and service separation.
 
-## Current Status
-
-In progress.
-
-Completed so far:
-
-- .NET 8 solution created
-- Four service projects added:
-  - OrderApi
-  - InventoryService
-  - NotificationService
-  - OrderQueryService
-- Docker Compose setup for RabbitMQ and Redis
-- SQL Server running locally through Docker
-- Initial database schema created:
-  - Orders
-  - OrderItems
-  - Products
-  - OutboxMessages
 
 ## Planned Architecture
 
