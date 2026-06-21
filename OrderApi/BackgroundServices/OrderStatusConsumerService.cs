@@ -35,8 +35,29 @@ public class OrderStatusConsumerService : BackgroundService
             Password = _settings.Password
         };
 
-        var connection = await factory.CreateConnectionAsync(stoppingToken);
-        var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
+        IConnection? connection = null;
+        IChannel? channel = null;
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                connection = await factory.CreateConnectionAsync(stoppingToken);
+                channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
+                _logger.LogInformation("OrderApi status consumer connected to RabbitMQ.");
+                break;
+            }   
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "RabbitMQ is not ready. OrderApi retrying in 5 seconds...");
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+        }
+        
+        if (channel == null)
+        {
+            return;
+        }
 
         await channel.ExchangeDeclareAsync(
             exchange: _settings.ResultExchangeName,

@@ -1,4 +1,12 @@
 services:
+  sqlserver:
+    image: mcr.microsoft.com/azure-sql-edge
+    container_name: order-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Password123"
+    ports:
+      - "1434:1433"
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -12,3 +20,57 @@ services:
     container_name: order-redis
     ports:
       - "6379:6379"
+
+  orderapi:
+    build:
+      context: ./OrderApi
+      dockerfile: Dockerfile
+    container_name: order-api
+    restart: on-failure
+    ports:
+      - "8081:8080"
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=OrderProcessingDb;User Id=sa;Password=Password123;TrustServerCertificate=True;"
+      RabbitMq__HostName: "rabbitmq"
+      RabbitMq__UserName: "guest"
+      RabbitMq__Password: "guest"
+      RabbitMq__ExchangeName: "order.exchange"
+      RabbitMq__ResultExchangeName: "order.result.exchange"
+      RabbitMq__ResultQueueName: "order.status.update.queue"
+    depends_on:
+      - sqlserver
+      - rabbitmq
+
+  inventoryservice:
+    build:
+      context: ./InventoryService
+      dockerfile: Dockerfile
+    container_name: inventory-service
+    restart: on-failure
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=OrderProcessingDb;User Id=sa;Password=Password123;TrustServerCertificate=True;"
+      RabbitMq__HostName: "rabbitmq"
+      RabbitMq__UserName: "guest"
+      RabbitMq__Password: "guest"
+      RabbitMq__ExchangeName: "order.exchange"
+      RabbitMq__QueueName: "inventory.order.created.queue"
+      RabbitMq__ResultExchangeName: "order.result.exchange"
+    depends_on:
+      - sqlserver
+      - rabbitmq
+
+  orderqueryservice:
+    build:
+      context: ./OrderQueryService
+      dockerfile: Dockerfile
+    container_name: order-query-service
+    ports:
+      - "8082:8080"
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=OrderProcessingDb;User Id=sa;Password=Password123;TrustServerCertificate=True;"
+      ConnectionStrings__Redis: "redis:6379"
+    depends_on:
+      - sqlserver
+      - redis
